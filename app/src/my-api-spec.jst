@@ -1,0 +1,14 @@
+JSIGHT 0.3
+
+POST /users // Create a user
+  Request 
+    @user
+  200
+    "OK"
+
+TYPE @user
+{
+  "id": 1,
+  "login": "tom",
+  "name": "John" // {optional: true}
+}
