@@ -15,13 +15,14 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     let api_spec_path = "/opt/app/src/my-api-spec.jst";
     let method = get_current_method(&req);
     let uri = req.uri().to_string();
+    let headers = get_http_headers(req.headers());
     let request_body = req.collect().await.unwrap().to_bytes();
 
-    let result = jsight::validate_http_request(
+    let _result = jsight::validate_http_request(
         api_spec_path,
         &method,
         &uri,
-        123,
+        &headers,
         &request_body
     );
 
@@ -64,4 +65,12 @@ fn get_current_method(req: &Request<Incoming>) -> String {
         // Add more HTTP methods as needed
         _ => "UNKNOWN".to_string(),
     }
+}
+
+fn get_http_headers(hyper_headers: &hyper::HeaderMap) -> http::HeaderMap {
+    let mut http_headers = http::HeaderMap::new();
+    hyper_headers.iter().for_each(|(k, v)| {
+        http_headers.append(k, v.clone());
+    });
+    return http_headers;
 }

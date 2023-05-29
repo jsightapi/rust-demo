@@ -4,6 +4,7 @@ use libloading::{Symbol, Library};
 use libc::c_char;
 use libc::c_int;
 use once_cell::sync::OnceCell;
+use http::HeaderMap;
 
 pub struct ValidationError {
     pub reported_by: String,
@@ -26,9 +27,15 @@ pub struct CErrorPosition {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct CHeader {
-    pub name: *mut ::std::os::raw::c_char,
-    pub value: *mut ::std::os::raw::c_char,
+struct CHeader {
+    pub name : *const c_char,
+    pub value: *const c_char,
+}
+
+#[derive(Debug)]
+struct CStringHeader {
+    pub name : CString,
+    pub value: CString
 }
 
 #[repr(C)]
@@ -74,30 +81,68 @@ pub fn stat() -> Result<&'static str, Box<dyn std::error::Error>> {
 }
 
 pub fn validate_http_request(
-    api_spec_path  : &str, 
-    method         : &str, 
-    uri            : &str, 
-    request_headers: i32, 
-    request_body   : &[u8]
+    api_spec_path   : &str, 
+    method          : &str, 
+    uri             : &str, 
+    rust_headers    : &HeaderMap, 
+    _request_body   : &[u8]
 ) -> Result<(), ValidationError> {
+  
+    let func = JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "validate_http_request()"));
+    let c_api_spec_path = CString::new(api_spec_path).expect("CString conversion failed");
+    let c_method        = CString::new(method       ).expect("CString conversion failed");
+    let c_uri           = CString::new(uri          ).expect("CString conversion failed");
+
+    let mut c_string_headers = Vec::new();
+
+    for (k, v) in rust_headers.iter() {
+        let c_string_header = CStringHeader {
+            name : CString::new(k.as_str())         .expect("CString conversion failed"),
+            value: CString::new(v.to_str().unwrap()).expect("CString conversion failed")
+        };
+        c_string_headers.push(c_string_header);
+    }
+
+    println!("{:?}", c_string_headers);
+
+    let mut c_headers = Vec::new();
+
+    for c_string_header in c_string_headers.iter() {
+        let c_header = CHeader {
+            name : c_string_header.name.as_ptr(),
+            value: c_string_header.value.as_ptr()
+        };
+        c_headers.push(c_header);
+    }
+    println!("{:?}", c_headers);
+
+    let mut c_header_ptrs = Vec::new();
+    for c_header in c_headers.iter() {
+        let c_header_ptr: *const CHeader = c_header;
+        c_header_ptrs.push(c_header_ptr);
+    }
+    c_header_ptrs.push(std::ptr::null());
+
+    println!("{:?}", c_header_ptrs);
+
+
+
+
     unsafe{
-        let func = JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "validate_http_request()"));
-        let c_api_spec_path = CString::new(api_spec_path).expect("CString conversion failed");
-        let c_method        = CString::new(method       ).expect("CString conversion failed");
-        let c_uri           = CString::new(uri          ).expect("CString conversion failed");
+
         let c_error = func(
             c_api_spec_path.as_ptr(),
             c_method       .as_ptr(),
             c_uri          .as_ptr(),
-            std::ptr::null(),
+            c_header_ptrs  .as_ptr(),
             std::ptr::null()
         );
 
         if ! c_error.is_null() {
-            let reported_by = str::from_utf8(CStr::from_ptr((*c_error).reported_by).to_bytes()).expect("Invalid UTF-8 string").to_owned();
-            let _type       = str::from_utf8(CStr::from_ptr((*c_error).r#type     ).to_bytes()).expect("Invalid UTF-8 string").to_owned();
-            let title       = str::from_utf8(CStr::from_ptr((*c_error).title      ).to_bytes()).expect("Invalid UTF-8 string").to_owned();
-            let detail      = str::from_utf8(CStr::from_ptr((*c_error).detail     ).to_bytes()).expect("Invalid UTF-8 string").to_owned();
+            let reported_by = from_c_str((*c_error).reported_by).unwrap();
+            let _type       = from_c_str((*c_error).r#type     ).unwrap();
+            let title       = from_c_str((*c_error).title      ).unwrap();
+            let detail      = from_c_str((*c_error).detail     ).unwrap();
 
             println!("reported_by: {}", reported_by);
             println!("type: {}"       , _type);
@@ -116,6 +161,11 @@ pub fn validate_http_request(
     }
 
     Ok(())
+}
+
+unsafe fn from_c_str(c_str: *mut c_char) -> Result<String, String> {
+    let string = str::from_utf8(CStr::from_ptr(c_str).to_bytes()).expect("Invalid UTF-8 string").to_owned();
+    Ok(string)
 }
 
 /*
