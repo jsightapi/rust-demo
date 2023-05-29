@@ -17,7 +17,7 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     let uri = req.uri().to_string();
     let request_body = req.collect().await.unwrap().to_bytes();
 
-    jsight::validate_http_request(
+    let result = jsight::validate_http_request(
         api_spec_path,
         &method,
         &uri,
