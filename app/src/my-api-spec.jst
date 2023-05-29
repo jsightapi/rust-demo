@@ -2,7 +2,13 @@ JSIGHT 0.3
 
 POST /users // Create a user
   Request 
-    @user
+    Headers
+      {
+        "x-custom": "12"
+      }
+    Body
+      @user
+
   200
     "OK"
 

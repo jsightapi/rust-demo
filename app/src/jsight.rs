@@ -84,16 +84,17 @@ pub fn validate_http_request(
     api_spec_path   : &str, 
     method          : &str, 
     uri             : &str, 
-    rust_headers    : &HeaderMap, 
-    _request_body   : &[u8]
+    request_headers : &HeaderMap, 
+    request_body    : &[u8]
 ) -> Result<(), ValidationError> {
   
     let func = JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "validate_http_request()"));
     let c_api_spec_path = CString::new(api_spec_path).expect("CString conversion failed");
     let c_method        = CString::new(method       ).expect("CString conversion failed");
     let c_uri           = CString::new(uri          ).expect("CString conversion failed");
+    let c_body          = CString::new(request_body ).expect("Failed to create CString");
 
-    let c_string_headers = get_c_string_headers( rust_headers    ).unwrap();
+    let c_string_headers = get_c_string_headers( request_headers ).unwrap();
     let c_headers        = get_c_headers       (&c_string_headers).unwrap();
     let c_header_ptrs    = get_c_header_ptrs   (&c_headers       ).unwrap();
 
@@ -104,7 +105,7 @@ pub fn validate_http_request(
             c_method       .as_ptr(),
             c_uri          .as_ptr(),
             c_header_ptrs  .as_ptr(),
-            std::ptr::null()
+            c_body         .as_ptr()
         );
 
         if ! c_error.is_null() {
