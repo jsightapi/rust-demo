@@ -93,40 +93,9 @@ pub fn validate_http_request(
     let c_method        = CString::new(method       ).expect("CString conversion failed");
     let c_uri           = CString::new(uri          ).expect("CString conversion failed");
 
-    let mut c_string_headers = Vec::new();
-
-    for (k, v) in rust_headers.iter() {
-        let c_string_header = CStringHeader {
-            name : CString::new(k.as_str())         .expect("CString conversion failed"),
-            value: CString::new(v.to_str().unwrap()).expect("CString conversion failed")
-        };
-        c_string_headers.push(c_string_header);
-    }
-
-    println!("{:?}", c_string_headers);
-
-    let mut c_headers = Vec::new();
-
-    for c_string_header in c_string_headers.iter() {
-        let c_header = CHeader {
-            name : c_string_header.name.as_ptr(),
-            value: c_string_header.value.as_ptr()
-        };
-        c_headers.push(c_header);
-    }
-    println!("{:?}", c_headers);
-
-    let mut c_header_ptrs = Vec::new();
-    for c_header in c_headers.iter() {
-        let c_header_ptr: *const CHeader = c_header;
-        c_header_ptrs.push(c_header_ptr);
-    }
-    c_header_ptrs.push(std::ptr::null());
-
-    println!("{:?}", c_header_ptrs);
-
-
-
+    let c_string_headers = get_c_string_headers( rust_headers    ).unwrap();
+    let c_headers        = get_c_headers       (&c_string_headers).unwrap();
+    let c_header_ptrs    = get_c_header_ptrs   (&c_headers       ).unwrap();
 
     unsafe{
 
@@ -166,6 +135,43 @@ pub fn validate_http_request(
 unsafe fn from_c_str(c_str: *mut c_char) -> Result<String, String> {
     let string = str::from_utf8(CStr::from_ptr(c_str).to_bytes()).expect("Invalid UTF-8 string").to_owned();
     Ok(string)
+}
+
+fn get_c_string_headers(rust_headers: &HeaderMap) -> Result<Vec<CStringHeader>, String> {
+    let mut c_string_headers = Vec::new();
+
+    for (k, v) in rust_headers.iter() {
+        let c_string_header = CStringHeader {
+            name : CString::new(k.as_str())         .expect("CString conversion failed"),
+            value: CString::new(v.to_str().unwrap()).expect("CString conversion failed")
+        };
+        c_string_headers.push(c_string_header);
+    }
+
+    Ok(c_string_headers)
+}
+
+fn get_c_headers(c_string_headers: &Vec<CStringHeader>) -> Result<Vec<CHeader>, String> {
+    let mut c_headers = Vec::new();
+
+    for c_string_header in c_string_headers.iter() {
+        let c_header = CHeader {
+            name : c_string_header.name.as_ptr(),
+            value: c_string_header.value.as_ptr()
+        };
+        c_headers.push(c_header);
+    }
+    Ok(c_headers)
+}
+
+fn get_c_header_ptrs(c_headers: &Vec<CHeader>) -> Result<Vec<*const CHeader>, String> {
+    let mut c_header_ptrs = Vec::new();
+    for c_header in c_headers.iter() {
+        let c_header_ptr: *const CHeader = c_header;
+        c_header_ptrs.push(c_header_ptr);
+    }
+    c_header_ptrs.push(std::ptr::null());
+    Ok(c_header_ptrs)
 }
 
 /*
