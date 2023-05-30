@@ -6,14 +6,23 @@ use libc::c_int;
 use once_cell::sync::OnceCell;
 use http::HeaderMap;
 
+#[derive(Debug, Clone)]
+pub struct ErrorPosition {
+    pub filepath: Option<String>,
+    pub index   : Option<i32>,
+    pub line    : Option<i32>,
+    pub col     : Option<i32>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ValidationError {
     pub reported_by: String,
     pub r#type     : String,
     pub code       : i32,
     pub title      : String,
     pub detail     : String,
-    // pub Position: *mut ErrorPosition,
-    // pub Trace: *mut *mut ::std::os::raw::c_char,
+    pub position   : ErrorPosition,
+    pub trace      : Vec<String>,
 }
 
 #[repr(C)]
@@ -53,7 +62,8 @@ pub struct CValidationError {
 static LIB_CELL: OnceCell<Library> = OnceCell::new();
 
 static JSIGHT_STAT_SYMBOL_CELL                 : OnceCell<Symbol<unsafe extern fn() -> *const c_char>> = OnceCell::new();
-static JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, requestHeaders: *const *const CHeader, requestBody: *const c_char) -> *const CValidationError>> = OnceCell::new();
+static JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, requestHeaders: *const *const CHeader, requestBody: *const c_char) -> *mut CValidationError>> = OnceCell::new();
+static JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (error: *mut CValidationError)>> = OnceCell::new();
 // static JSIGHT_FREE
 
 pub fn init(lib_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -62,9 +72,11 @@ pub fn init(lib_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
         let jsight_stat_symbol                  = LIB_CELL.get().unwrap().get(b"JSightStat")?;
         let jsight_validate_http_request_symbol = LIB_CELL.get().unwrap().get(b"JSightValidateHttpRequest")?;
+        let jsight_free_validation_error_symbol = LIB_CELL.get().unwrap().get(b"freeValidationError")?;
 
         JSIGHT_STAT_SYMBOL_CELL                 .set(jsight_stat_symbol                 ).unwrap();
         JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.set(jsight_validate_http_request_symbol).unwrap();
+        JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL.set(jsight_free_validation_error_symbol).unwrap();
 
         Ok(())
     }
@@ -88,7 +100,7 @@ pub fn validate_http_request(
     request_body    : &[u8]
 ) -> Result<(), ValidationError> {
   
-    let func = JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "validate_http_request()"));
+    let validate_func = JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "validate_http_request()"));
     let c_api_spec_path = CString::new(api_spec_path).expect("CString conversion failed");
     let c_method        = CString::new(method       ).expect("CString conversion failed");
     let c_uri           = CString::new(uri          ).expect("CString conversion failed");
@@ -100,7 +112,7 @@ pub fn validate_http_request(
 
     unsafe{
 
-        let c_error = func(
+        let c_error = validate_func(
             c_api_spec_path.as_ptr(),
             c_method       .as_ptr(),
             c_uri          .as_ptr(),
@@ -109,23 +121,67 @@ pub fn validate_http_request(
         );
 
         if ! c_error.is_null() {
+            let free_error_func = JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "freeValidationError()"));
             let reported_by = from_c_str((*c_error).reported_by).unwrap();
             let _type       = from_c_str((*c_error).r#type     ).unwrap();
             let title       = from_c_str((*c_error).title      ).unwrap();
             let detail      = from_c_str((*c_error).detail     ).unwrap();
 
+            let mut position = ErrorPosition {
+                filepath : None,
+                index    : None,
+                line     : None,
+                col      : None
+            };
+
+            if ! (*c_error).position.is_null() {
+                let c_position = (*c_error).position;
+
+                if ! (*c_position).filepath.is_null() {
+                    position.filepath = Some(from_c_str((*c_position).filepath).unwrap());
+                }
+                if ! (*c_position).index.is_null() {
+                    position.index = Some(*(*c_position).index);
+                }
+                if ! (*c_position).line.is_null() {
+                    position.line  = Some(*(*c_position).line);
+                }                
+                if ! (*c_position).col.is_null() {
+                    position.col   = Some(*(*c_position).col);
+                }
+            }
+
+            let mut trace : Vec<String> = Vec::new();
+            if !(*c_error).trace.is_null() {
+                let c_trace = (*c_error).trace;
+                let mut i = 0;
+                while !(*c_trace.offset(i)).is_null() {
+                    let c_string = CStr::from_ptr(*c_trace.offset(i));
+                    let string = c_string.to_string_lossy().into_owned();
+                    trace.push(string);
+                    i += 1;
+                }                
+            }
+
             println!("reported_by: {}", reported_by);
             println!("type: {}"       , _type);
             println!("title: {}"      , title);
             println!("detail: {}"     , detail);
+            println!("position: {:?}" , position);
+            println!("trace: {:?}"    , trace);
 
             let error = ValidationError {
                 reported_by: reported_by,
                 r#type     : _type,
-                code       : 123,
+                code       : (*c_error).code,
                 title      : title,
                 detail     : detail,
+                position   : position,
+                trace      : trace,
             };
+
+            free_error_func(c_error);
+
             return Err(error);
         }
     }
@@ -175,13 +231,3 @@ fn get_c_header_ptrs(c_headers: &Vec<CHeader>) -> Result<Vec<*const CHeader>, St
     Ok(c_header_ptrs)
 }
 
-/*
-pub fn JSightValidateHttpRequest(
-    apiSpecFilePath: *mut ::std::os::raw::c_char,
-    requestMethod: *mut ::std::os::raw::c_char,
-    requestURI: *mut ::std::os::raw::c_char,
-    requestHeaders: *mut *mut Header,
-    requestBody: *mut ::std::os::raw::c_char,
-) -> *mut ValidationError;
-
-*/
