@@ -29,7 +29,6 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     match validation_result {
         Ok(()) => {}
         Err(error) => {
-            println!("ERROR TRACE {:?}", error.trace);
             let json_error = jsight::serialize_error("json", error).unwrap();
             return Ok(Response::new(Full::new(Bytes::from(json_error))));
         }

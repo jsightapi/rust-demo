@@ -185,52 +185,51 @@ pub fn validate_http_request(
 }
 
 pub fn serialize_error(format: &str, error: ValidationError) -> Result<String, Box<dyn Error>> {
+    let c_format      = CString::new(format                    ).expect("CString conversion failed");
+    let c_reported_by = CString::new(error.reported_by.as_str()).expect("CString conversion failed");
+    let c_type        = CString::new(error.r#type     .as_str()).expect("CString conversion failed");
+    let c_title       = CString::new(error.title      .as_str()).expect("CString conversion failed");
+    let c_detail      = CString::new(error.detail     .as_str()).expect("CString conversion failed");
+
+    let mut c_position = CErrorPosition {
+        filepath : ptr::null(),
+        index    : ptr::null(),
+        line     : ptr::null(),
+        col      : ptr::null()
+    };
+
+    if error.position.filepath.is_some() {
+        let filepath = CString::new(error.position.filepath.unwrap().as_str()).expect("CString conversion failed");
+        c_position.filepath = filepath.as_ptr();
+    }
+
+    if error.position.index.is_some() {
+        c_position.index = &error.position.index.unwrap();
+    }
+
+    if error.position.line.is_some() {
+        c_position.line = &error.position.line.unwrap();
+    }
+
+    if error.position.col.is_some() {
+        c_position.col = &error.position.col.unwrap();
+    }
+
+    let c_strings     = get_c_strings  (&error.trace).unwrap();
+    let c_string_ptrs = get_c_string_ptrs(&c_strings).unwrap();
+
+    let c_error = CValidationError {
+        reported_by : c_reported_by.as_ptr(),
+        r#type      : c_type.as_ptr(),
+        code        : error.code,
+        title       : c_title.as_ptr(),
+        detail      : c_detail.as_ptr(),
+        position    : &c_position,
+        trace       : c_string_ptrs.as_ptr(),        
+    };
+
     unsafe {
         let func = JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "serialize_error()"));
-        
-        let c_format      = CString::new(format                    ).expect("CString conversion failed");
-        let c_reported_by = CString::new(error.reported_by.as_str()).expect("CString conversion failed");
-        let c_type        = CString::new(error.r#type     .as_str()).expect("CString conversion failed");
-        let c_title       = CString::new(error.title      .as_str()).expect("CString conversion failed");
-        let c_detail      = CString::new(error.detail     .as_str()).expect("CString conversion failed");
-
-        let mut c_position = CErrorPosition {
-            filepath : ptr::null(),
-            index    : ptr::null(),
-            line     : ptr::null(),
-            col      : ptr::null()
-        };
-
-        if error.position.filepath.is_some() {
-            let filepath = CString::new(error.position.filepath.unwrap().as_str()).expect("CString conversion failed");
-            c_position.filepath = filepath.as_ptr();
-        }
-
-        if error.position.index.is_some() {
-            c_position.index = &error.position.index.unwrap();
-        }
-
-        if error.position.line.is_some() {
-            c_position.line = &error.position.line.unwrap();
-        }
-
-        if error.position.col.is_some() {
-            c_position.col = &error.position.col.unwrap();
-        }
-
-        let c_strings     = get_c_strings  (&error.trace).unwrap();
-        let c_string_ptrs = get_c_string_ptrs(&c_strings).unwrap();
-
-        let c_error = CValidationError {
-            reported_by : c_reported_by.as_ptr(),
-            r#type      : c_type.as_ptr(),
-            code        : error.code,
-            title       : c_title.as_ptr(),
-            detail      : c_detail.as_ptr(),
-            position    : &c_position,
-            trace       : c_string_ptrs.as_ptr(),        
-        };
-
         let c_str = func(c_format.as_ptr(), &c_error);
         let rust_str = from_c_str(c_str).unwrap();
         Ok(rust_str)
