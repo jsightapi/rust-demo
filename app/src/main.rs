@@ -15,20 +15,22 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     let api_spec_path = "/opt/app/src/my-api-spec.jst";
     let method = get_current_method(&req);
     let uri = req.uri().to_string();
-    let headers = get_http_headers(req.headers());
+    let request_headers = get_http_headers(req.headers());
     let request_body = req.collect().await.unwrap().to_bytes();
 
     println!("{} {} {}", Local::now().format("%Y-%m-%d %H:%M:%S"), method, uri);
 
-    let validation_result = jsight::validate_http_request(
+    // Validate request
+
+    let request_validation_result = jsight::validate_http_request(
         api_spec_path,
         &method,
         &uri,
-        &headers,
+        &request_headers,
         &request_body
     );
 
-    match validation_result {
+    match request_validation_result {
         Ok(()) => {}
         Err(error) => {
             let json_error = jsight::serialize_error("json", error).unwrap();
@@ -36,7 +38,30 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
         }
     }
 
+    // Prepare stub response
 
+    let response_body = b"OK";
+    let response_status_code = 200;
+    let response_headers = http::HeaderMap::new();
+
+    // Validate response
+
+    let response_validation_result = jsight::validate_http_response(
+        api_spec_path,
+        &method,
+        &uri,
+        response_status_code,
+        &response_headers,
+        response_body
+    );
+
+    match response_validation_result {
+        Ok(()) => {}
+        Err(error) => {
+            let json_error = jsight::serialize_error("json", error).unwrap();
+            return Ok(Response::new(Full::new(Bytes::from(json_error))));
+        }
+    }
 
     Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
 }
