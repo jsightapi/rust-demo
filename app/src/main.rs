@@ -18,13 +18,24 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     let headers = get_http_headers(req.headers());
     let request_body = req.collect().await.unwrap().to_bytes();
 
-    let _result = jsight::validate_http_request(
+    let validation_result = jsight::validate_http_request(
         api_spec_path,
         &method,
         &uri,
         &headers,
         &request_body
     );
+
+    match validation_result {
+        Ok(()) => {}
+        Err(error) => {
+            println!("ERROR TRACE {:?}", error.trace);
+            let json_error = jsight::serialize_error("json", error).unwrap();
+            return Ok(Response::new(Full::new(Bytes::from(json_error))));
+        }
+    }
+
+
 
     println!("{} {} {}", Local::now().format("%Y-%m-%d %H:%M:%S"), method, uri);
     Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))

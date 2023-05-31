@@ -1,8 +1,8 @@
 use std::ffi::{CStr, CString};
-use std::str;
+use std::{str, ptr};
+use std::error::Error;
 use libloading::{Symbol, Library};
-use libc::c_char;
-use libc::c_int;
+use libc::{c_char, c_int};
 use once_cell::sync::OnceCell;
 use http::HeaderMap;
 
@@ -28,10 +28,10 @@ pub struct ValidationError {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct CErrorPosition {
-    pub filepath: *mut c_char,
-    pub index   : *mut c_int,
-    pub line    : *mut c_int,
-    pub col     : *mut c_int,
+    pub filepath: *const c_char,
+    pub index   : *const c_int,
+    pub line    : *const c_int,
+    pub col     : *const c_int,
 }
 
 #[repr(C)]
@@ -50,44 +50,46 @@ struct CStringHeader {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct CValidationError {
-    pub reported_by: *mut c_char,
-    pub r#type     : *mut c_char,
+    pub reported_by: *const c_char,
+    pub r#type     : *const c_char,
     pub code       : c_int,
-    pub title      : *mut c_char,
-    pub detail     : *mut c_char,
-    pub position   : *mut CErrorPosition,
-    pub trace      : *mut *mut c_char,
+    pub title      : *const c_char,
+    pub detail     : *const c_char,
+    pub position   : *const CErrorPosition,
+    pub trace      : *const *const c_char,
 }
 
 static LIB_CELL: OnceCell<Library> = OnceCell::new();
 
 static JSIGHT_STAT_SYMBOL_CELL                 : OnceCell<Symbol<unsafe extern fn() -> *const c_char>> = OnceCell::new();
 static JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, requestHeaders: *const *const CHeader, requestBody: *const c_char) -> *mut CValidationError>> = OnceCell::new();
-static JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (error: *mut CValidationError)>> = OnceCell::new();
+static JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (error: *const CValidationError)>> = OnceCell::new();
+static JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL      : OnceCell<Symbol<unsafe extern fn (format: *const c_char, error: *const CValidationError,) -> *const c_char>> = OnceCell::new();
 // static JSIGHT_FREE
 
-pub fn init(lib_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init(lib_path: &str) -> Result<(), Box<dyn Error>> {
     unsafe {
         LIB_CELL.set(Library::new(lib_path)?).unwrap();
 
         let jsight_stat_symbol                  = LIB_CELL.get().unwrap().get(b"JSightStat")?;
         let jsight_validate_http_request_symbol = LIB_CELL.get().unwrap().get(b"JSightValidateHttpRequest")?;
         let jsight_free_validation_error_symbol = LIB_CELL.get().unwrap().get(b"freeValidationError")?;
+        let jsight_serialize_error_symbol       = LIB_CELL.get().unwrap().get(b"JSightSerializeError")?;
 
         JSIGHT_STAT_SYMBOL_CELL                 .set(jsight_stat_symbol                 ).unwrap();
         JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.set(jsight_validate_http_request_symbol).unwrap();
         JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL.set(jsight_free_validation_error_symbol).unwrap();
+        JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL      .set(jsight_serialize_error_symbol      ).unwrap();
 
         Ok(())
     }
 }
 
-pub fn stat() -> Result<&'static str, Box<dyn std::error::Error>> {
+pub fn stat() -> Result<String, Box<dyn Error>> {
     unsafe {
         let func = JSIGHT_STAT_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "stat()"));
         let c_str = func();
-        let rust_str = CStr::from_ptr(c_str).to_bytes();
-        let rust_str = str::from_utf8(rust_str).expect("Invalid UTF-8 string");
+        let rust_str = from_c_str(c_str).unwrap();
         Ok(rust_str)
     }
 }
@@ -163,13 +165,6 @@ pub fn validate_http_request(
                 }                
             }
 
-            println!("reported_by: {}", reported_by);
-            println!("type: {}"       , _type);
-            println!("title: {}"      , title);
-            println!("detail: {}"     , detail);
-            println!("position: {:?}" , position);
-            println!("trace: {:?}"    , trace);
-
             let error = ValidationError {
                 reported_by: reported_by,
                 r#type     : _type,
@@ -189,12 +184,66 @@ pub fn validate_http_request(
     Ok(())
 }
 
-unsafe fn from_c_str(c_str: *mut c_char) -> Result<String, String> {
+pub fn serialize_error(format: &str, error: ValidationError) -> Result<String, Box<dyn Error>> {
+    unsafe {
+        let func = JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "serialize_error()"));
+        
+        let c_format      = CString::new(format                    ).expect("CString conversion failed");
+        let c_reported_by = CString::new(error.reported_by.as_str()).expect("CString conversion failed");
+        let c_type        = CString::new(error.r#type     .as_str()).expect("CString conversion failed");
+        let c_title       = CString::new(error.title      .as_str()).expect("CString conversion failed");
+        let c_detail      = CString::new(error.detail     .as_str()).expect("CString conversion failed");
+
+        let mut c_position = CErrorPosition {
+            filepath : ptr::null(),
+            index    : ptr::null(),
+            line     : ptr::null(),
+            col      : ptr::null()
+        };
+
+        if error.position.filepath.is_some() {
+            let filepath = CString::new(error.position.filepath.unwrap().as_str()).expect("CString conversion failed");
+            c_position.filepath = filepath.as_ptr();
+        }
+
+        if error.position.index.is_some() {
+            c_position.index = &error.position.index.unwrap();
+        }
+
+        if error.position.line.is_some() {
+            c_position.line = &error.position.line.unwrap();
+        }
+
+        if error.position.col.is_some() {
+            c_position.col = &error.position.col.unwrap();
+        }
+
+        let (c_trace_ptr, _owned_c_trace_strings) = vec_string_to_c_string_array(&error.trace);
+
+        let c_error = CValidationError {
+            reported_by : c_reported_by.as_ptr(),
+            r#type      : c_type.as_ptr(),
+            code        : error.code,
+            title       : c_title.as_ptr(),
+            detail      : c_detail.as_ptr(),
+            position    : &c_position,
+            trace       : c_trace_ptr,        
+        };
+
+        let c_str = func(c_format.as_ptr(), &c_error);
+        let rust_str = from_c_str(c_str).unwrap();
+        Ok(rust_str)
+    }
+}
+
+
+
+unsafe fn from_c_str(c_str: *const c_char) -> Result<String, Box<dyn Error>> {
     let string = str::from_utf8(CStr::from_ptr(c_str).to_bytes()).expect("Invalid UTF-8 string").to_owned();
     Ok(string)
 }
 
-fn get_c_string_headers(rust_headers: &HeaderMap) -> Result<Vec<CStringHeader>, String> {
+fn get_c_string_headers(rust_headers: &HeaderMap) -> Result<Vec<CStringHeader>, Box<dyn Error>> {
     let mut c_string_headers = Vec::new();
 
     for (k, v) in rust_headers.iter() {
@@ -208,7 +257,7 @@ fn get_c_string_headers(rust_headers: &HeaderMap) -> Result<Vec<CStringHeader>, 
     Ok(c_string_headers)
 }
 
-fn get_c_headers(c_string_headers: &Vec<CStringHeader>) -> Result<Vec<CHeader>, String> {
+fn get_c_headers(c_string_headers: &Vec<CStringHeader>) -> Result<Vec<CHeader>, Box<dyn Error>> {
     let mut c_headers = Vec::new();
 
     for c_string_header in c_string_headers.iter() {
@@ -221,7 +270,7 @@ fn get_c_headers(c_string_headers: &Vec<CStringHeader>) -> Result<Vec<CHeader>, 
     Ok(c_headers)
 }
 
-fn get_c_header_ptrs(c_headers: &Vec<CHeader>) -> Result<Vec<*const CHeader>, String> {
+fn get_c_header_ptrs(c_headers: &Vec<CHeader>) -> Result<Vec<*const CHeader>, Box<dyn Error>> {
     let mut c_header_ptrs = Vec::new();
     for c_header in c_headers.iter() {
         let c_header_ptr: *const CHeader = c_header;
@@ -231,3 +280,20 @@ fn get_c_header_ptrs(c_headers: &Vec<CHeader>) -> Result<Vec<*const CHeader>, St
     Ok(c_header_ptrs)
 }
 
+fn vec_string_to_c_string_array(strings: &Vec<String>) -> (*const *const c_char, Vec<CString>) {
+    let mut c_strings  : Vec<CString>       = Vec::with_capacity(strings.len());
+    let mut c_pointers : Vec<*const c_char> = Vec::with_capacity(strings.len() + 1); // Add extra element for the null pointer
+
+    for string in strings.iter() {
+        let c_string = CString::new(string.as_str()).expect("Failed to create CString");
+        c_strings.push(c_string);
+    }
+
+    for c_string in c_strings.iter() {
+        c_pointers.push(c_string.as_ptr());
+    }
+    // Add null pointer as the last element
+    c_pointers.push(ptr::null());
+
+    (c_pointers.as_ptr(), c_strings)
+}
