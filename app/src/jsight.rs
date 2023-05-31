@@ -218,7 +218,8 @@ pub fn serialize_error(format: &str, error: ValidationError) -> Result<String, B
             c_position.col = &error.position.col.unwrap();
         }
 
-        let (c_trace_ptr, _owned_c_trace_strings) = vec_string_to_c_string_array(&error.trace);
+        let c_strings     = get_c_strings  (&error.trace).unwrap();
+        let c_string_ptrs = get_c_string_ptrs(&c_strings).unwrap();
 
         let c_error = CValidationError {
             reported_by : c_reported_by.as_ptr(),
@@ -227,7 +228,7 @@ pub fn serialize_error(format: &str, error: ValidationError) -> Result<String, B
             title       : c_title.as_ptr(),
             detail      : c_detail.as_ptr(),
             position    : &c_position,
-            trace       : c_trace_ptr,        
+            trace       : c_string_ptrs.as_ptr(),        
         };
 
         let c_str = func(c_format.as_ptr(), &c_error);
@@ -276,24 +277,26 @@ fn get_c_header_ptrs(c_headers: &Vec<CHeader>) -> Result<Vec<*const CHeader>, Bo
         let c_header_ptr: *const CHeader = c_header;
         c_header_ptrs.push(c_header_ptr);
     }
-    c_header_ptrs.push(std::ptr::null());
+    c_header_ptrs.push(ptr::null());
     Ok(c_header_ptrs)
 }
 
-fn vec_string_to_c_string_array(strings: &Vec<String>) -> (*const *const c_char, Vec<CString>) {
-    let mut c_strings  : Vec<CString>       = Vec::with_capacity(strings.len());
-    let mut c_pointers : Vec<*const c_char> = Vec::with_capacity(strings.len() + 1); // Add extra element for the null pointer
-
+fn get_c_strings(strings: &Vec<String>) -> Result<Vec<CString>, Box<dyn Error>> {
+    let mut c_strings : Vec<CString> = Vec::new();
     for string in strings.iter() {
         let c_string = CString::new(string.as_str()).expect("Failed to create CString");
         c_strings.push(c_string);
     }
+    Ok(c_strings)
+}
 
+fn get_c_string_ptrs(c_strings: &Vec<CString>) -> Result<Vec<*const c_char>, Box<dyn Error>> {
+    let mut c_string_ptrs : Vec<*const c_char> = Vec::new();
     for c_string in c_strings.iter() {
-        c_pointers.push(c_string.as_ptr());
+        c_string_ptrs.push(c_string.as_ptr());
     }
     // Add null pointer as the last element
-    c_pointers.push(ptr::null());
+    c_string_ptrs.push(ptr::null());
 
-    (c_pointers.as_ptr(), c_strings)
+    Ok(c_string_ptrs)
 }
