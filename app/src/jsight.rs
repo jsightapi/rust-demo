@@ -61,25 +61,27 @@ pub struct CValidationError {
 
 static LIB_CELL: OnceCell<Library> = OnceCell::new();
 
-static JSIGHT_STAT_SYMBOL_CELL                 : OnceCell<Symbol<unsafe extern fn() -> *const c_char>> = OnceCell::new();
-static JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, requestHeaders: *const *const CHeader, requestBody: *const c_char) -> *mut CValidationError>> = OnceCell::new();
-static JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (error: *const CValidationError)>> = OnceCell::new();
-static JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL      : OnceCell<Symbol<unsafe extern fn (format: *const c_char, error: *const CValidationError,) -> *const c_char>> = OnceCell::new();
-// static JSIGHT_FREE
+static JSIGHT_STAT_SYMBOL_CELL                  : OnceCell<Symbol<unsafe extern fn() -> *const c_char>> = OnceCell::new();
+static JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL : OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, requestHeaders: *const *const CHeader, requestBody: *const c_char) -> *mut CValidationError>> = OnceCell::new();
+static JSIGHT_VALIDATE_HTTP_RESPONSE_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, responseStatusCode: c_int, responseHeaders: *const *const CHeader, responseBody: *const c_char) -> *mut CValidationError>> = OnceCell::new();
+static JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL : OnceCell<Symbol<unsafe extern fn (error: *const CValidationError)>> = OnceCell::new();
+static JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL       : OnceCell<Symbol<unsafe extern fn (format: *const c_char, error: *const CValidationError,) -> *const c_char>> = OnceCell::new();
 
 pub fn init(lib_path: &str) -> Result<(), Box<dyn Error>> {
     unsafe {
         LIB_CELL.set(Library::new(lib_path)?).unwrap();
 
-        let jsight_stat_symbol                  = LIB_CELL.get().unwrap().get(b"JSightStat")?;
-        let jsight_validate_http_request_symbol = LIB_CELL.get().unwrap().get(b"JSightValidateHttpRequest")?;
-        let jsight_free_validation_error_symbol = LIB_CELL.get().unwrap().get(b"freeValidationError")?;
-        let jsight_serialize_error_symbol       = LIB_CELL.get().unwrap().get(b"JSightSerializeError")?;
+        let jsight_stat_symbol                   = LIB_CELL.get().unwrap().get(b"JSightStat")?;
+        let jsight_validate_http_request_symbol  = LIB_CELL.get().unwrap().get(b"JSightValidateHttpRequest")?;
+        let jsight_validate_http_response_symbol = LIB_CELL.get().unwrap().get(b"JSightValidateHttpResponse")?;
+        let jsight_free_validation_error_symbol  = LIB_CELL.get().unwrap().get(b"freeValidationError")?;
+        let jsight_serialize_error_symbol        = LIB_CELL.get().unwrap().get(b"JSightSerializeError")?;
 
-        JSIGHT_STAT_SYMBOL_CELL                 .set(jsight_stat_symbol                 ).unwrap();
-        JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL.set(jsight_validate_http_request_symbol).unwrap();
-        JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL.set(jsight_free_validation_error_symbol).unwrap();
-        JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL      .set(jsight_serialize_error_symbol      ).unwrap();
+        JSIGHT_STAT_SYMBOL_CELL                  .set(jsight_stat_symbol                  ).unwrap();
+        JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL .set(jsight_validate_http_request_symbol ).unwrap();
+        JSIGHT_VALIDATE_HTTP_RESPONSE_SYMBOL_CELL.set(jsight_validate_http_response_symbol).unwrap();
+        JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL .set(jsight_free_validation_error_symbol ).unwrap();
+        JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL       .set(jsight_serialize_error_symbol       ).unwrap();
 
         Ok(())
     }
@@ -113,7 +115,6 @@ pub fn validate_http_request(
     let c_header_ptrs    = get_c_header_ptrs   (&c_headers       ).unwrap();
 
     unsafe{
-
         let c_error = validate_func(
             c_api_spec_path.as_ptr(),
             c_method       .as_ptr(),
@@ -123,60 +124,49 @@ pub fn validate_http_request(
         );
 
         if ! c_error.is_null() {
+            let error = get_validation_error( &(*c_error) ).unwrap();
             let free_error_func = JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "freeValidationError()"));
-            let reported_by = from_c_str((*c_error).reported_by).unwrap();
-            let _type       = from_c_str((*c_error).r#type     ).unwrap();
-            let title       = from_c_str((*c_error).title      ).unwrap();
-            let detail      = from_c_str((*c_error).detail     ).unwrap();
-
-            let mut position = ErrorPosition {
-                filepath : None,
-                index    : None,
-                line     : None,
-                col      : None
-            };
-
-            if ! (*c_error).position.is_null() {
-                let c_position = (*c_error).position;
-
-                if ! (*c_position).filepath.is_null() {
-                    position.filepath = Some(from_c_str((*c_position).filepath).unwrap());
-                }
-                if ! (*c_position).index.is_null() {
-                    position.index = Some(*(*c_position).index);
-                }
-                if ! (*c_position).line.is_null() {
-                    position.line  = Some(*(*c_position).line);
-                }                
-                if ! (*c_position).col.is_null() {
-                    position.col   = Some(*(*c_position).col);
-                }
-            }
-
-            let mut trace : Vec<String> = Vec::new();
-            if !(*c_error).trace.is_null() {
-                let c_trace = (*c_error).trace;
-                let mut i = 0;
-                while !(*c_trace.offset(i)).is_null() {
-                    let c_string = CStr::from_ptr(*c_trace.offset(i));
-                    let string = c_string.to_string_lossy().into_owned();
-                    trace.push(string);
-                    i += 1;
-                }                
-            }
-
-            let error = ValidationError {
-                reported_by: reported_by,
-                r#type     : _type,
-                code       : (*c_error).code,
-                title      : title,
-                detail     : detail,
-                position   : position,
-                trace      : trace,
-            };
-
             free_error_func(c_error);
+            return Err(error);
+        }
+    }
 
+    Ok(())
+}
+
+pub fn validate_http_response(
+    api_spec_path    : &str, 
+    method           : &str, 
+    uri              : &str,
+    status_code      : i32,
+    response_headers : &HeaderMap, 
+    response_body    : &[u8]
+) -> Result<(), ValidationError> {
+  
+    let validate_func = JSIGHT_VALIDATE_HTTP_RESPONSE_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "validate_http_response()"));
+    let c_api_spec_path = CString::new(api_spec_path).expect("CString conversion failed");
+    let c_method        = CString::new(method       ).expect("CString conversion failed");
+    let c_uri           = CString::new(uri          ).expect("CString conversion failed");
+    let c_body          = CString::new(response_body).expect("Failed to create CString");
+
+    let c_string_headers = get_c_string_headers( response_headers).unwrap();
+    let c_headers        = get_c_headers       (&c_string_headers).unwrap();
+    let c_header_ptrs    = get_c_header_ptrs   (&c_headers       ).unwrap();
+
+    unsafe{
+        let c_error = validate_func(
+            c_api_spec_path.as_ptr(),
+            c_method       .as_ptr(),
+            c_uri          .as_ptr(),
+            status_code,
+            c_header_ptrs  .as_ptr(),
+            c_body         .as_ptr()
+        );
+
+        if ! c_error.is_null() {
+            let error = get_validation_error( &(*c_error) ).unwrap();
+            let free_error_func = JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "freeValidationError()"));
+            free_error_func(c_error);
             return Err(error);
         }
     }
@@ -236,7 +226,60 @@ pub fn serialize_error(format: &str, error: ValidationError) -> Result<String, B
     }
 }
 
+unsafe fn get_validation_error(c_error: &CValidationError) -> Result<ValidationError, Box<dyn Error>> {
+    let reported_by = from_c_str(c_error.reported_by).unwrap();
+    let _type       = from_c_str(c_error.r#type     ).unwrap();
+    let title       = from_c_str(c_error.title      ).unwrap();
+    let detail      = from_c_str(c_error.detail     ).unwrap();
 
+    let mut position = ErrorPosition {
+        filepath : None,
+        index    : None,
+        line     : None,
+        col      : None
+    };
+
+    if ! (*c_error).position.is_null() {
+        let c_position = (*c_error).position;
+
+        if ! (*c_position).filepath.is_null() {
+            position.filepath = Some(from_c_str((*c_position).filepath).unwrap());
+        }
+        if ! (*c_position).index.is_null() {
+            position.index = Some(*(*c_position).index);
+        }
+        if ! (*c_position).line.is_null() {
+            position.line  = Some(*(*c_position).line);
+        }                
+        if ! (*c_position).col.is_null() {
+            position.col   = Some(*(*c_position).col);
+        }
+    }
+
+    let mut trace : Vec<String> = Vec::new();
+    if ! c_error.trace.is_null() {
+        let c_trace = c_error.trace;
+        let mut i = 0;
+        while !(*c_trace.offset(i)).is_null() {
+            let c_string = CStr::from_ptr(*c_trace.offset(i));
+            let string = c_string.to_string_lossy().into_owned();
+            trace.push(string);
+            i += 1;
+        }                
+    }
+
+    let error = ValidationError {
+        reported_by: reported_by,
+        r#type     : _type,
+        code       : c_error.code,
+        title      : title,
+        detail     : detail,
+        position   : position,
+        trace      : trace,
+    };    
+
+    Ok(error)
+}
 
 unsafe fn from_c_str(c_str: *const c_char) -> Result<String, Box<dyn Error>> {
     let string = str::from_utf8(CStr::from_ptr(c_str).to_bytes()).expect("Invalid UTF-8 string").to_owned();

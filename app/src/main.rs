@@ -18,6 +18,8 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     let headers = get_http_headers(req.headers());
     let request_body = req.collect().await.unwrap().to_bytes();
 
+    println!("{} {} {}", Local::now().format("%Y-%m-%d %H:%M:%S"), method, uri);
+
     let validation_result = jsight::validate_http_request(
         api_spec_path,
         &method,
@@ -36,7 +38,6 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
 
 
 
-    println!("{} {} {}", Local::now().format("%Y-%m-%d %H:%M:%S"), method, uri);
     Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
 }
 
