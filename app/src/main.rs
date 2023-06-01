@@ -49,12 +49,6 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
         .body(Full::new(Bytes::from("\"OK\"")))
         .unwrap();
 
-    /*
-    let response_body = "\"OK\"";
-    let response_status_code = 200;
-    let response_headers = http::HeaderMap::new();
-    */
-
     // Validate response
     let response_headers     = get_http_headers(response.headers());
     let response_status_code = response.status().as_u16();
@@ -111,6 +105,7 @@ fn get_current_method(req: &Request<Incoming>) -> String {
     match req.method() {
         &Method::GET    => "GET"   .to_string(),
         &Method::POST   => "POST"  .to_string(),
+        &Method::PATCH  => "PATCH" .to_string(),
         &Method::PUT    => "PUT"   .to_string(),
         &Method::DELETE => "DELETE".to_string(),
         // Add more HTTP methods as needed
