@@ -10,6 +10,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, Method};
 use tokio::net::TcpListener;
 
+// Server HTTP-request processing function
 async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
 
     let api_spec_path = "/opt/app/src/my-api-spec.jst";
@@ -19,6 +20,8 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
     let request_body = req.collect().await.unwrap().to_bytes();
 
     println!("{} {} {}", Local::now().format("%Y-%m-%d %H:%M:%S"), method, uri);
+
+    _ = jsight::clear_cache(); // COMMENT THIS FUNCTION ON PROD!!! Only for development purpuses.
 
     // Validate request
 
@@ -34,36 +37,48 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
         Ok(()) => {}
         Err(error) => {
             let json_error = jsight::serialize_error("json", error).unwrap();
-            return Ok(Response::new(Full::new(Bytes::from(json_error))));
+            println!("Request does not match API spec {}: {}", api_spec_path, json_error);
+            return Ok(Response::builder().status(400).body(Full::new(Bytes::from(json_error))).unwrap());
         }
     }
 
     // Prepare stub response
 
-    let response_body = b"OK";
+    let response = Response::builder()
+        .status(200)
+        .body(Full::new(Bytes::from("\"OK\"")))
+        .unwrap();
+
+    /*
+    let response_body = "\"OK\"";
     let response_status_code = 200;
     let response_headers = http::HeaderMap::new();
+    */
 
     // Validate response
+    let response_headers     = get_http_headers(response.headers());
+    let response_status_code = response.status().as_u16();
+    let response_body        = response.collect().await.unwrap().to_bytes();
 
     let response_validation_result = jsight::validate_http_response(
         api_spec_path,
         &method,
         &uri,
-        response_status_code,
+        response_status_code.into(),
         &response_headers,
-        response_body
+        &response_body
     );
 
     match response_validation_result {
         Ok(()) => {}
         Err(error) => {
             let json_error = jsight::serialize_error("json", error).unwrap();
-            return Ok(Response::new(Full::new(Bytes::from(json_error))));
+            println!("Response does not match API spec {}: {}", api_spec_path, json_error);
+            return Ok(Response::builder().status(500).body(Full::new(Bytes::from(json_error))).unwrap());
         }
     }
 
-    Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
+    Ok(Response::builder().status(response_status_code).body(Full::new(Bytes::from(response_body))).unwrap())
 }
 
 #[tokio::main]
@@ -94,9 +109,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 fn get_current_method(req: &Request<Incoming>) -> String {
     match req.method() {
-        &Method::GET    => "GET".to_string(),
-        &Method::POST   => "POST".to_string(),
-        &Method::PUT    => "PUT".to_string(),
+        &Method::GET    => "GET"   .to_string(),
+        &Method::POST   => "POST"  .to_string(),
+        &Method::PUT    => "PUT"   .to_string(),
         &Method::DELETE => "DELETE".to_string(),
         // Add more HTTP methods as needed
         _ => "UNKNOWN".to_string(),

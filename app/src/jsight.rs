@@ -66,6 +66,7 @@ static JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL : OnceCell<Symbol<unsafe extern 
 static JSIGHT_VALIDATE_HTTP_RESPONSE_SYMBOL_CELL: OnceCell<Symbol<unsafe extern fn (apiSpecFilePath: *const c_char, requestMethod: *const c_char, requestURI: *const c_char, responseStatusCode: c_int, responseHeaders: *const *const CHeader, responseBody: *const c_char) -> *mut CValidationError>> = OnceCell::new();
 static JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL : OnceCell<Symbol<unsafe extern fn (error: *const CValidationError)>> = OnceCell::new();
 static JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL       : OnceCell<Symbol<unsafe extern fn (format: *const c_char, error: *const CValidationError,) -> *const c_char>> = OnceCell::new();
+static JSIGHT_CLEAR_CACHE_SYMBOL_CELL           : OnceCell<Symbol<unsafe extern fn () -> c_int>> = OnceCell::new();
 
 pub fn init(lib_path: &str) -> Result<(), Box<dyn Error>> {
     unsafe {
@@ -76,12 +77,14 @@ pub fn init(lib_path: &str) -> Result<(), Box<dyn Error>> {
         let jsight_validate_http_response_symbol = LIB_CELL.get().unwrap().get(b"JSightValidateHttpResponse")?;
         let jsight_free_validation_error_symbol  = LIB_CELL.get().unwrap().get(b"freeValidationError")?;
         let jsight_serialize_error_symbol        = LIB_CELL.get().unwrap().get(b"JSightSerializeError")?;
+        let jsight_clear_cache_symbol            = LIB_CELL.get().unwrap().get(b"JSightClearCache")?;
 
         JSIGHT_STAT_SYMBOL_CELL                  .set(jsight_stat_symbol                  ).unwrap();
         JSIGHT_VALIDATE_HTTP_REQUEST_SYMBOL_CELL .set(jsight_validate_http_request_symbol ).unwrap();
         JSIGHT_VALIDATE_HTTP_RESPONSE_SYMBOL_CELL.set(jsight_validate_http_response_symbol).unwrap();
         JSIGHT_FREE_VALIDATION_ERROR_SYMBOL_CELL .set(jsight_free_validation_error_symbol ).unwrap();
         JSIGHT_SERIALIZE_ERROR_SYMBOL_CELL       .set(jsight_serialize_error_symbol       ).unwrap();
+        JSIGHT_CLEAR_CACHE_SYMBOL_CELL           .set(jsight_clear_cache_symbol           ).unwrap();
 
         Ok(())
     }
@@ -223,6 +226,14 @@ pub fn serialize_error(format: &str, error: ValidationError) -> Result<String, B
         let c_str = func(c_format.as_ptr(), &c_error);
         let rust_str = from_c_str(c_str).unwrap();
         Ok(rust_str)
+    }
+}
+
+pub fn clear_cache() -> Result<(), Box<dyn Error>>{
+    unsafe {
+        let func = JSIGHT_CLEAR_CACHE_SYMBOL_CELL.get().expect(&format!("The jsight::{} function was not initialized! Call jsight::init() first.", "clear_cache()"));
+        func();
+        Ok(())
     }
 }
 
